@@ -11,7 +11,7 @@
     <main class="container">
       <header class="header">
         <h1>公寓电费监控</h1>
-        <p class="subtitle">柱状图：区间消耗，折线图：余额走势</p>
+        <p class="subtitle">柱状图显示区间消耗，折线图显示余额；支持按日/按小时切换、异常标记与续航预测。</p>
       </header>
 
       <section class="stats">
@@ -22,6 +22,10 @@
         <div class="stat">
           <span>今日消耗</span>
           <strong id="today-usage">--</strong>
+        </div>
+        <div class="stat">
+          <span>预计可用</span>
+          <strong id="predicted-days">--</strong>
         </div>
         <div class="stat">
           <span>最后同步</span>
@@ -41,6 +45,16 @@
             <option value="168">近 7 天</option>
             <option value="336">近 14 天</option>
             <option value="720">近 30 天</option>
+            <option value="2160">近 90 天</option>
+          </select>
+        </label>
+
+        <label class="control">
+          <span>展示粒度</span>
+          <select id="granularity">
+            <option value="auto" selected>自动（长周期按天）</option>
+            <option value="hourly">按小时</option>
+            <option value="daily">按天</option>
           </select>
         </label>
 
@@ -54,7 +68,7 @@
           <input id="end-time" type="datetime-local" />
         </label>
 
-        <label class="control">
+        <label class="control" id="interval-control">
           <span>显示间隔（分钟）</span>
           <input id="interval-minutes" type="number" min="30" step="30" value="30" />
         </label>
@@ -67,12 +81,20 @@
 
       <section class="chart-meta">
         <span id="range-text">当前：近 3 天</span>
+        <span id="granularity-text">粒度：自动</span>
         <span id="interval-text">间隔：30 分钟</span>
-        <span id="bucket-text">点数：--</span>
+        <span id="bucket-text">点数：-</span>
       </section>
 
       <section class="chart-panel">
         <div id="usage-chart"></div>
+      </section>
+
+      <section class="anomaly-panel">
+        <h2>异常提示</h2>
+        <ul id="anomaly-list">
+          <li class="empty">暂无异常</li>
+        </ul>
       </section>
 
       <section class="footer">

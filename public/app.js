@@ -1,24 +1,36 @@
 const chartDom = document.getElementById("usage-chart");
 const latestBalanceEl = document.getElementById("latest-balance");
 const todayUsageEl = document.getElementById("today-usage");
+const predictedDaysEl = document.getElementById("predicted-days");
 const lastSyncEl = document.getElementById("last-sync");
 const statusTextEl = document.getElementById("status-text");
 const rangeTextEl = document.getElementById("range-text");
+const granularityTextEl = document.getElementById("granularity-text");
 const intervalTextEl = document.getElementById("interval-text");
 const bucketTextEl = document.getElementById("bucket-text");
+const anomalyListEl = document.getElementById("anomaly-list");
 
 const rangeHoursEl = document.getElementById("range-hours");
+const granularityEl = document.getElementById("granularity");
 const startTimeEl = document.getElementById("start-time");
 const endTimeEl = document.getElementById("end-time");
 const intervalMinutesEl = document.getElementById("interval-minutes");
+const intervalControlEl = document.getElementById("interval-control");
 const applyBtnEl = document.getElementById("apply-btn");
 const clearTimeBtnEl = document.getElementById("clear-time-btn");
 const exportChartLinkEl = document.getElementById("export-chart-link");
 
 const chart = echarts.init(chartDom);
 
+const GRANULARITY_LABEL_MAP = {
+  auto: "自动",
+  hourly: "按小时",
+  daily: "按天",
+};
+
 const state = {
   rangeHours: Number(rangeHoursEl.value) || 72,
+  granularity: granularityEl.value || "auto",
   intervalMinutes: Number(intervalMinutesEl.value) || 30,
   minIntervalMinutes: 30,
   startIso: "",
@@ -63,6 +75,22 @@ function parseInputToIso(inputValue) {
   return date.toISOString();
 }
 
+function formatAmount(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) {
+    return "--";
+  }
+  return `${num.toFixed(2)} 元`;
+}
+
+function formatDays(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num) || num < 0) {
+    return "--";
+  }
+  return `${num.toFixed(2)} 天`;
+}
+
 function setStatus(message, isError = false) {
   statusTextEl.textContent = message;
   statusTextEl.classList.toggle("error", Boolean(isError));
@@ -79,9 +107,16 @@ function hasCustomWindow() {
   return Boolean(state.startIso && state.endIso);
 }
 
+function syncIntervalInputState() {
+  const disabled = state.granularity === "daily";
+  intervalMinutesEl.disabled = disabled;
+  intervalControlEl.classList.toggle("disabled", disabled);
+}
+
 function updateExportLink() {
   const query = new URLSearchParams({
     rangeHours: String(state.rangeHours),
+    granularity: state.granularity,
     intervalMinutes: String(state.intervalMinutes),
   });
   if (hasCustomWindow()) {
@@ -97,14 +132,79 @@ function updateMetaText(chartData) {
   } else {
     rangeTextEl.textContent = `当前：近 ${chartData.rangeHours} 小时`;
   }
-  intervalTextEl.textContent = `间隔：${chartData.intervalMinutes} 分钟`;
+
+  granularityTextEl.textContent = `粒度：${GRANULARITY_LABEL_MAP[chartData.granularity] || chartData.granularity}`;
+
+  if (chartData.granularity === "daily") {
+    intervalTextEl.textContent = "间隔：按天聚合";
+  } else {
+    intervalTextEl.textContent = `间隔：${chartData.intervalMinutes} 分钟`;
+  }
+
   bucketTextEl.textContent = `点数：${chartData.bucketCount}`;
 }
 
-function renderChart(points) {
+function pickBalanceForMark(balanceValues, index) {
+  const direct = Number(balanceValues[index]);
+  if (Number.isFinite(direct)) {
+    return direct;
+  }
+
+  for (let i = index - 1; i >= 0; i -= 1) {
+    const value = Number(balanceValues[i]);
+    if (Number.isFinite(value)) {
+      return value;
+    }
+  }
+
+  for (let i = index + 1; i < balanceValues.length; i += 1) {
+    const value = Number(balanceValues[i]);
+    if (Number.isFinite(value)) {
+      return value;
+    }
+  }
+
+  return 0;
+}
+
+function buildAnomalyMarks(points, consumptionValues, balanceValues, anomalies) {
+  const spikeMarks = [];
+  const offlineMarks = [];
+
+  for (const item of anomalies) {
+    const idx = Number(item.index);
+    if (!Number.isInteger(idx) || idx < 0 || idx >= points.length) {
+      continue;
+    }
+
+    if (item.type === "spike") {
+      spikeMarks.push({
+        name: "异常消耗",
+        xAxis: idx,
+        yAxis: Number(consumptionValues[idx]) || 0,
+        value: "突增",
+      });
+      continue;
+    }
+
+    if (item.type === "offline") {
+      offlineMarks.push({
+        name: "采集掉线",
+        xAxis: idx,
+        yAxis: pickBalanceForMark(balanceValues, idx),
+        value: "掉线",
+      });
+    }
+  }
+
+  return { spikeMarks, offlineMarks };
+}
+
+function renderChart(points, anomalies) {
   const labels = points.map((item) => item.label);
   const consumptionValues = points.map((item) => item.consumption);
   const balanceValues = points.map((item) => item.balance);
+  const { spikeMarks, offlineMarks } = buildAnomalyMarks(points, consumptionValues, balanceValues, anomalies);
 
   chart.setOption(
     {
@@ -157,6 +257,16 @@ function renderChart(points) {
             color: "#2f7b6d",
             borderRadius: [4, 4, 0, 0],
           },
+          markPoint:
+            spikeMarks.length > 0
+              ? {
+                  symbol: "pin",
+                  symbolSize: 36,
+                  itemStyle: { color: "#d64f4f" },
+                  label: { color: "#fff", fontSize: 10 },
+                  data: spikeMarks,
+                }
+              : undefined,
         },
         {
           name: "电费余额",
@@ -172,11 +282,57 @@ function renderChart(points) {
             width: 2,
           },
           data: balanceValues,
+          markPoint:
+            offlineMarks.length > 0
+              ? {
+                  symbol: "triangle",
+                  symbolSize: 16,
+                  symbolRotate: 180,
+                  itemStyle: { color: "#5b7095" },
+                  label: {
+                    show: true,
+                    formatter: "离线",
+                    color: "#5b7095",
+                    fontSize: 10,
+                    offset: [0, -16],
+                  },
+                  data: offlineMarks,
+                }
+              : undefined,
         },
       ],
     },
     true,
   );
+}
+
+function renderAnomalies(anomalies) {
+  anomalyListEl.textContent = "";
+  if (!Array.isArray(anomalies) || anomalies.length === 0) {
+    const empty = document.createElement("li");
+    empty.className = "empty";
+    empty.textContent = "暂无异常";
+    anomalyListEl.appendChild(empty);
+    return;
+  }
+
+  const latestFirst = [...anomalies].slice(-12).reverse();
+  for (const item of latestFirst) {
+    const li = document.createElement("li");
+    li.className = `anomaly-item ${item.type || ""}`;
+
+    const title = document.createElement("span");
+    title.className = "anomaly-title";
+    title.textContent = item.type === "spike" ? "异常消耗" : "采集掉线";
+
+    const detail = document.createElement("span");
+    detail.className = "anomaly-detail";
+    detail.textContent = `${formatDateTime(item.ts)} · ${item.message || "--"}`;
+
+    li.appendChild(title);
+    li.appendChild(detail);
+    anomalyListEl.appendChild(li);
+  }
 }
 
 async function fetchJson(url) {
@@ -200,6 +356,9 @@ async function loadUiConfig() {
   const config = await fetchJson("/api/ui-config");
   state.minIntervalMinutes = Number(config.minIntervalMinutes) || 30;
   state.intervalMinutes = clampInterval(Number(config.defaultIntervalMinutes) || state.intervalMinutes);
+  state.granularity = config.defaultGranularity || state.granularity;
+
+  granularityEl.value = state.granularity;
   intervalMinutesEl.min = String(state.minIntervalMinutes);
   intervalMinutesEl.step = String(state.minIntervalMinutes);
   intervalMinutesEl.value = String(state.intervalMinutes);
@@ -207,10 +366,12 @@ async function loadUiConfig() {
 
 function readControls() {
   state.rangeHours = Number(rangeHoursEl.value) || 72;
+  state.granularity = granularityEl.value || "auto";
   state.intervalMinutes = clampInterval(Number(intervalMinutesEl.value));
   intervalMinutesEl.value = String(state.intervalMinutes);
   state.startIso = parseInputToIso(startTimeEl.value);
   state.endIso = parseInputToIso(endTimeEl.value);
+  syncIntervalInputState();
 }
 
 function validateControls() {
@@ -226,6 +387,15 @@ function validateControls() {
   }
 }
 
+function updatePredictedInfo(status) {
+  predictedDaysEl.textContent = formatDays(status.predictedRemainingDays);
+  if (status.predictedDepletionAt) {
+    predictedDaysEl.title = `预计耗尽时间：${formatDateTime(status.predictedDepletionAt)}`;
+  } else {
+    predictedDaysEl.removeAttribute("title");
+  }
+}
+
 async function refresh() {
   try {
     readControls();
@@ -234,6 +404,7 @@ async function refresh() {
 
     const query = new URLSearchParams({
       rangeHours: String(state.rangeHours),
+      granularity: state.granularity,
       intervalMinutes: String(state.intervalMinutes),
     });
     if (hasCustomWindow()) {
@@ -259,18 +430,26 @@ async function refresh() {
     updateExportLink();
     updateMetaText(chartData);
 
-    latestBalanceEl.textContent = status.latestBalance == null ? "--" : `${status.latestBalance} 元`;
-    todayUsageEl.textContent = `${status.todayConsumption ?? 0} 元`;
+    latestBalanceEl.textContent = formatAmount(status.latestBalance);
+    todayUsageEl.textContent = formatAmount(status.todayConsumption ?? 0);
+    updatePredictedInfo(status);
     lastSyncEl.textContent = formatDateTime(status.lastSyncAt);
-    setStatus(status.lastError ? `采集异常: ${status.lastError}` : "运行正常", Boolean(status.lastError));
+    setStatus(status.lastError ? `采集异常：${status.lastError}` : "运行正常", Boolean(status.lastError));
 
-    renderChart(chartData.points || []);
+    renderAnomalies(chartData.anomalies || []);
+    renderChart(chartData.points || [], chartData.anomalies || []);
   } catch (error) {
-    setStatus(`加载失败: ${error.message}`, true);
+    setStatus(`加载失败：${error.message}`, true);
   }
 }
 
 applyBtnEl.addEventListener("click", () => {
+  refresh();
+});
+
+granularityEl.addEventListener("change", () => {
+  state.granularity = granularityEl.value || "auto";
+  syncIntervalInputState();
   refresh();
 });
 
@@ -285,5 +464,6 @@ clearTimeBtnEl.addEventListener("click", () => {
 window.addEventListener("resize", () => chart.resize());
 
 await loadUiConfig();
+syncIntervalInputState();
 await refresh();
 setInterval(refresh, 60 * 1000);

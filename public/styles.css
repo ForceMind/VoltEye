@@ -4,7 +4,9 @@
   --text: #102037;
   --muted: #607088;
   --accent: #2f7b6d;
+  --accent-2: #5b7095;
   --danger: #c23636;
+  --border: #d6dde8;
 }
 
 * {
@@ -20,7 +22,7 @@ body {
 }
 
 .container {
-  max-width: 980px;
+  max-width: 1080px;
   margin: 0 auto;
   padding: 24px 16px 28px;
 }
@@ -39,7 +41,7 @@ body {
 .stats {
   margin-top: 18px;
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 12px;
 }
 
@@ -80,7 +82,7 @@ body {
 }
 
 .control.wide {
-  min-width: 180px;
+  min-width: 200px;
 }
 
 .control span {
@@ -91,11 +93,17 @@ body {
 .control select,
 .control input {
   height: 36px;
-  border: 1px solid #d6dde8;
+  border: 1px solid var(--border);
   border-radius: 8px;
   padding: 0 10px;
   font-size: 14px;
   background: #fff;
+}
+
+.control.disabled input {
+  background: #f2f5fa;
+  color: #8897ad;
+  cursor: not-allowed;
 }
 
 #apply-btn,
@@ -125,7 +133,7 @@ body {
 }
 
 .btn-link.secondary {
-  background: #5b7095;
+  background: var(--accent-2);
 }
 
 .chart-meta {
@@ -146,7 +154,64 @@ body {
 }
 
 #usage-chart {
-  height: 420px;
+  height: 430px;
+}
+
+.anomaly-panel {
+  margin-top: 14px;
+  background: var(--card);
+  border-radius: 12px;
+  box-shadow: 0 8px 18px rgba(35, 54, 86, 0.08);
+  padding: 12px;
+}
+
+.anomaly-panel h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+#anomaly-list {
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.anomaly-item {
+  border: 1px solid #e4eaf2;
+  border-radius: 10px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.anomaly-item.spike {
+  border-color: #f0d4d4;
+  background: #fff7f7;
+}
+
+.anomaly-item.offline {
+  border-color: #d8e0ef;
+  background: #f7f9fd;
+}
+
+.anomaly-title {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.anomaly-detail {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+#anomaly-list .empty {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: 13px;
 }
 
 .footer {
@@ -159,6 +224,16 @@ body {
   color: var(--danger);
 }
 
+@media (max-width: 900px) {
+  .stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  #anomaly-list {
+    grid-template-columns: 1fr;
+  }
+}
+
 @media (max-width: 760px) {
   .stats {
     grid-template-columns: 1fr;
@@ -168,8 +243,10 @@ body {
     align-items: stretch;
   }
 
-  .control {
+  .control,
+  .control.wide {
     width: 100%;
+    min-width: 0;
   }
 
   .btn-link,

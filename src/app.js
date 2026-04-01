@@ -1,13 +1,22 @@
 import path from "node:path";
 import express from "express";
 import { fileURLToPath } from "node:url";
-import { buildDailyConsumption, buildIntervalSeries, buildStatusSummary } from "./metrics.js";
+import {
+  buildChartAnomalies,
+  buildDailyConsumption,
+  buildDailySeries,
+  buildIntervalSeries,
+  buildStatusSummary,
+} from "./metrics.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const publicDir = path.resolve(__dirname, "../public");
+
 const MAX_BUCKETS = 1500;
 const MAX_RANGE_HOURS = 24 * 365;
+const AUTO_DAILY_THRESHOLD_HOURS = 72;
+const SUPPORTED_GRANULARITIES = new Set(["auto", "hourly", "daily"]);
 
 function parseDays(raw, fallback = 30) {
   const value = Number(raw ?? fallback);
@@ -52,25 +61,35 @@ function parseTimestampMs(raw) {
   return ms;
 }
 
+function parseGranularity(raw) {
+  const value = String(raw || "auto").toLowerCase();
+  if (SUPPORTED_GRANULARITIES.has(value)) {
+    return value;
+  }
+  return "auto";
+}
+
 function resolveChartWindow(query, fallbackRangeHours) {
   const now = Date.now();
   const startMs = parseTimestampMs(query.start);
   const endMs = parseTimestampMs(query.end);
 
   if ((startMs === null) !== (endMs === null)) {
-    throw new Error("start 和 end 需要同时提供");
+    throw new Error("start 和 end 必须同时提供");
   }
 
   if (startMs !== null && endMs !== null) {
     if (endMs <= startMs) {
       throw new Error("end 必须晚于 start");
     }
+
     const cappedEnd = Math.min(endMs, now);
     const cappedStart = Math.min(startMs, cappedEnd - 1);
     const maxRangeMs = MAX_RANGE_HOURS * 60 * 60 * 1000;
     if (cappedEnd - cappedStart > maxRangeMs) {
       throw new Error(`时间范围不能超过 ${MAX_RANGE_HOURS} 小时`);
     }
+
     return {
       startMs: cappedStart,
       endMs: cappedEnd,
@@ -84,6 +103,14 @@ function resolveChartWindow(query, fallbackRangeHours) {
     endMs: now,
     mode: "preset",
   };
+}
+
+function resolveGranularity(requestedGranularity, startMs, endMs) {
+  if (requestedGranularity === "hourly" || requestedGranularity === "daily") {
+    return requestedGranularity;
+  }
+  const windowHours = Math.max(1, Math.ceil((endMs - startMs) / (60 * 60 * 1000)));
+  return windowHours > AUTO_DAILY_THRESHOLD_HOURS ? "daily" : "hourly";
 }
 
 function pickEffectiveIntervalMinutes(requestedIntervalMinutes, minIntervalMinutes, startMs, endMs) {
@@ -106,6 +133,57 @@ function toCsv(headers, rows) {
     lines.push(row.map((cell) => csvEscape(cell)).join(","));
   }
   return `\uFEFF${lines.join("\n")}\n`;
+}
+
+function resolveChartData({ query, records, timeZone, minIntervalMinutes }) {
+  const rangeHours = parseRangeHours(query.rangeHours, 72);
+  const window = resolveChartWindow(query, rangeHours);
+  const requestedGranularity = parseGranularity(query.granularity);
+  const granularity = resolveGranularity(requestedGranularity, window.startMs, window.endMs);
+  const requestedIntervalMinutes = parseIntervalMinutes(
+    query.intervalMinutes,
+    minIntervalMinutes,
+    minIntervalMinutes,
+  );
+
+  let intervalMinutes = requestedIntervalMinutes;
+  let points = [];
+
+  if (granularity === "daily") {
+    intervalMinutes = 24 * 60;
+    points = buildDailySeries(records, window.startMs, window.endMs, timeZone);
+  } else {
+    intervalMinutes = pickEffectiveIntervalMinutes(
+      requestedIntervalMinutes,
+      minIntervalMinutes,
+      window.startMs,
+      window.endMs,
+    );
+    points = buildIntervalSeries(records, window.startMs, window.endMs, intervalMinutes, timeZone);
+  }
+
+  const anomalies = buildChartAnomalies(records, points, {
+    startMs: window.startMs,
+    endMs: window.endMs,
+    granularity,
+    expectedSampleMinutes: minIntervalMinutes,
+    timeZone,
+  });
+
+  return {
+    mode: window.mode,
+    rangeHours,
+    startMs: window.startMs,
+    endMs: window.endMs,
+    requestedGranularity,
+    granularity,
+    requestedIntervalMinutes,
+    intervalMinutes,
+    bucketCount: points.length,
+    minIntervalMinutes,
+    points,
+    anomalies,
+  };
 }
 
 export function createApp({ store, poller, config, logger }) {
@@ -148,38 +226,35 @@ export function createApp({ store, poller, config, logger }) {
       defaultRangeHours: 72,
       maxRangeHours: MAX_RANGE_HOURS,
       maxBuckets: MAX_BUCKETS,
+      defaultGranularity: "auto",
+      autoDailyThresholdHours: AUTO_DAILY_THRESHOLD_HOURS,
       serverTime: new Date().toISOString(),
     });
   });
 
   app.get("/api/chart", (req, res) => {
     try {
-      const rangeHours = parseRangeHours(req.query.rangeHours, 72);
-      const window = resolveChartWindow(req.query, rangeHours);
-      const requestedIntervalMinutes = parseIntervalMinutes(
-        req.query.intervalMinutes,
-        minIntervalMinutes,
-        minIntervalMinutes,
-      );
-      const intervalMinutes = pickEffectiveIntervalMinutes(
-        requestedIntervalMinutes,
-        minIntervalMinutes,
-        window.startMs,
-        window.endMs,
-      );
-
       const records = store.getRecords();
-      const points = buildIntervalSeries(records, window.startMs, window.endMs, intervalMinutes, config.timeZone);
-      res.json({
-        mode: window.mode,
-        rangeHours,
-        intervalMinutes,
-        requestedIntervalMinutes,
+      const chart = resolveChartData({
+        query: req.query,
+        records,
+        timeZone: config.timeZone,
         minIntervalMinutes,
-        bucketCount: points.length,
-        start: new Date(window.startMs).toISOString(),
-        end: new Date(window.endMs).toISOString(),
-        points,
+      });
+
+      res.json({
+        mode: chart.mode,
+        rangeHours: chart.rangeHours,
+        granularity: chart.granularity,
+        requestedGranularity: chart.requestedGranularity,
+        intervalMinutes: chart.intervalMinutes,
+        requestedIntervalMinutes: chart.requestedIntervalMinutes,
+        minIntervalMinutes: chart.minIntervalMinutes,
+        bucketCount: chart.bucketCount,
+        start: new Date(chart.startMs).toISOString(),
+        end: new Date(chart.endMs).toISOString(),
+        points: chart.points,
+        anomalies: chart.anomalies,
         updatedAt: new Date().toISOString(),
       });
     } catch (error) {
@@ -225,33 +300,38 @@ export function createApp({ store, poller, config, logger }) {
 
   app.get("/api/export-chart.csv", (req, res) => {
     try {
-      const rangeHours = parseRangeHours(req.query.rangeHours, 72);
-      const window = resolveChartWindow(req.query, rangeHours);
-      const requestedIntervalMinutes = parseIntervalMinutes(
-        req.query.intervalMinutes,
+      const records = store.getRecords();
+      const chart = resolveChartData({
+        query: req.query,
+        records,
+        timeZone: config.timeZone,
         minIntervalMinutes,
-        minIntervalMinutes,
-      );
-      const intervalMinutes = pickEffectiveIntervalMinutes(
-        requestedIntervalMinutes,
-        minIntervalMinutes,
-        window.startMs,
-        window.endMs,
-      );
-      const points = buildIntervalSeries(
-        store.getRecords(),
-        window.startMs,
-        window.endMs,
-        intervalMinutes,
-        config.timeZone,
-      );
+      });
+
+      const anomalyByIndex = new Map();
+      for (const item of chart.anomalies) {
+        const index = Number(item.index);
+        if (!Number.isInteger(index) || index < 0 || index >= chart.points.length) {
+          continue;
+        }
+        const list = anomalyByIndex.get(index) || [];
+        list.push(item.message);
+        anomalyByIndex.set(index, list);
+      }
 
       res.setHeader("Content-Type", "text/csv; charset=utf-8");
       res.setHeader("Content-Disposition", 'attachment; filename="volteye-chart.csv"');
       res.send(
         toCsv(
-          ["timestamp", "label", "consumption", "balance"],
-          points.map((row) => [row.ts, row.label, row.consumption, row.balance]),
+          ["timestamp", "label", "granularity", "consumption", "balance", "anomaly"],
+          chart.points.map((row, index) => [
+            row.ts,
+            row.label,
+            chart.granularity,
+            row.consumption,
+            row.balance,
+            (anomalyByIndex.get(index) || []).join(" | "),
+          ]),
         ),
       );
     } catch (error) {
