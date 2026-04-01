@@ -7,6 +7,10 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$repoRoot = Resolve-Path (Join-Path $scriptDir "..")
+Set-Location $repoRoot
+
 function Get-PlainTextFromSecureString {
   param([System.Security.SecureString]$Secure)
   $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($Secure)
@@ -81,7 +85,7 @@ if (-not $NoBrowser) {
 }
 
 try {
-  node src/index.js
+  node (Join-Path $repoRoot "src/index.js")
 }
 finally {
   Remove-Item Env:SITE_MOBILE -ErrorAction SilentlyContinue
