@@ -5,12 +5,12 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
 if ! command -v docker >/dev/null 2>&1; then
-  echo "Docker not found. Please install Docker first."
+  echo "未检测到 Docker，请先安装后再执行。"
   exit 1
 fi
 
 if ! docker compose version >/dev/null 2>&1; then
-  echo "Docker Compose plugin not found. Please install it first."
+  echo "未检测到 Docker Compose 插件，请先安装后再执行。"
   exit 1
 fi
 
@@ -67,19 +67,19 @@ find_free_port() {
   return 1
 }
 
-read -r -p "TCNest login mobile: " SITE_MOBILE_RAW
-read -r -s -p "TCNest login password: " SITE_PASSWORD_RAW
+read -r -p "请输入唐巢登录手机号: " SITE_MOBILE_RAW
+read -r -s -p "请输入唐巢登录密码: " SITE_PASSWORD_RAW
 echo
-read -r -p "Polling interval minutes (default 30): " POLL_INTERVAL_RAW
-read -r -p "Low balance threshold CNY (default 50): " LOW_BALANCE_RAW
-read -r -p "Contract ID (optional, blank = auto): " CONTRACT_ID_RAW
-read -r -p "Smart meter key (optional, blank = auto): " SMART_KEY_RAW
-read -r -p "Alert webhook URL (optional): " ALERT_WEBHOOK_RAW
-read -r -p "SYNC API key (blank = auto-generated): " SYNC_API_KEY_RAW
-read -r -p "Preferred start port (default 3000, script auto-finds free): " BASE_PORT_RAW
+read -r -p "采集间隔（分钟，默认 30）: " POLL_INTERVAL_RAW
+read -r -p "低余额阈值（元，默认 50）: " LOW_BALANCE_RAW
+read -r -p "合同 ID（可选，留空自动识别）: " CONTRACT_ID_RAW
+read -r -p "电表 KEY（可选，留空自动识别）: " SMART_KEY_RAW
+read -r -p "告警 Webhook 地址（可选）: " ALERT_WEBHOOK_RAW
+read -r -p "手动同步 API Key（留空自动生成）: " SYNC_API_KEY_RAW
+read -r -p "起始端口（默认 3000，脚本会自动找空闲端口）: " BASE_PORT_RAW
 
 if [[ -z "$SITE_MOBILE_RAW" || -z "$SITE_PASSWORD_RAW" ]]; then
-  echo "Mobile and password are required."
+  echo "手机号和密码不能为空。"
   exit 1
 fi
 
@@ -90,13 +90,13 @@ BASE_PORT="${BASE_PORT_RAW:-3000}"
 MAX_PORT=$((BASE_PORT + 200))
 
 if ! [[ "$BASE_PORT" =~ ^[0-9]+$ ]]; then
-  echo "Start port must be numeric."
+  echo "起始端口必须是数字。"
   exit 1
 fi
 
 HOST_PORT="$(find_free_port "$BASE_PORT" "$MAX_PORT" || true)"
 if [[ -z "$HOST_PORT" ]]; then
-  echo "No free port found in range ${BASE_PORT}-${MAX_PORT}."
+  echo "在 ${BASE_PORT}-${MAX_PORT} 范围内未找到可用端口。"
   exit 1
 fi
 
@@ -110,10 +110,10 @@ SYNC_API_KEY_ESCAPED="$(escape_env "$SYNC_API_KEY")"
 mkdir -p data
 
 cat > .env <<EOF
-# host port published by docker compose
+# Docker 对外端口（自动探测空闲端口）
 HOST_PORT=$HOST_PORT
 
-# app listens inside container on 3000
+# 容器内服务端口固定 3000
 PORT=3000
 TZ=Asia/Shanghai
 
@@ -136,11 +136,11 @@ EOF
 
 chmod 600 .env
 
-echo "Building and starting service..."
+echo "开始构建并启动服务..."
 docker compose up -d --build
 
 echo
-echo "Deployment completed."
-echo "URL: http://<server-ip>:$HOST_PORT"
-echo "Manual sync endpoint: POST /api/sync (header: x-api-key)"
+echo "部署完成。"
+echo "访问地址: http://<服务器IP>:$HOST_PORT"
+echo "手动采集接口: POST /api/sync（请求头携带 x-api-key）"
 echo "SYNC_API_KEY: $SYNC_API_KEY"
