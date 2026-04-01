@@ -11,7 +11,7 @@
     <main class="container">
       <header class="header">
         <h1>公寓电费监控</h1>
-        <p class="subtitle">柱状图：区间电费消耗，折线图：余额走势</p>
+        <p class="subtitle">柱状图：区间消耗，折线图：余额走势</p>
       </header>
 
       <section class="stats">
@@ -31,7 +31,7 @@
 
       <section class="controls">
         <label class="control">
-          <span>显示区间</span>
+          <span>预设区间</span>
           <select id="range-hours">
             <option value="6">近 6 小时</option>
             <option value="12">近 12 小时</option>
@@ -39,17 +39,36 @@
             <option value="48">近 2 天</option>
             <option value="72" selected>近 3 天</option>
             <option value="168">近 7 天</option>
+            <option value="336">近 14 天</option>
+            <option value="720">近 30 天</option>
           </select>
         </label>
 
+        <label class="control wide">
+          <span>开始时间（可选）</span>
+          <input id="start-time" type="datetime-local" />
+        </label>
+
+        <label class="control wide">
+          <span>结束时间（可选）</span>
+          <input id="end-time" type="datetime-local" />
+        </label>
+
         <label class="control">
-          <span>显示间隔(分钟)</span>
+          <span>显示间隔（分钟）</span>
           <input id="interval-minutes" type="number" min="30" step="30" value="30" />
         </label>
 
         <button id="apply-btn" type="button">应用设置</button>
+        <button id="clear-time-btn" type="button" class="ghost">清空自定义时间</button>
         <a id="export-chart-link" class="btn-link" href="/api/export-chart.csv">导出当前图表</a>
-        <a id="export-raw-link" class="btn-link secondary" href="/api/export.csv">导出原始表格</a>
+        <a id="export-raw-link" class="btn-link secondary" href="/api/export.csv">导出原始数据</a>
+      </section>
+
+      <section class="chart-meta">
+        <span id="range-text">当前：近 3 天</span>
+        <span id="interval-text">间隔：30 分钟</span>
+        <span id="bucket-text">点数：--</span>
       </section>
 
       <section class="chart-panel">

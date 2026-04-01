@@ -62,12 +62,14 @@ function normalizeRecords(records) {
     .sort((a, b) => a.t - b.t);
 }
 
-export function buildIntervalSeries(records, rangeHours, intervalMinutes, timeZone) {
+export function buildIntervalSeries(records, startMs, endMs, intervalMinutes, timeZone) {
   const sorted = normalizeRecords(records);
-  const now = Date.now();
-  const rangeMs = Math.max(1, Math.floor(rangeHours * 60 * 60 * 1000));
+  const safeStart = Math.max(0, Math.floor(startMs));
+  const safeEnd = Math.max(safeStart + 1, Math.floor(endMs));
+  const rangeMs = Math.max(1, safeEnd - safeStart);
   const intervalMs = Math.max(60_000, Math.floor(intervalMinutes * 60 * 1000));
-  const start = now - rangeMs;
+  const start = safeStart;
+  const end = safeEnd;
   const bucketCount = Math.max(1, Math.ceil(rangeMs / intervalMs));
 
   const points = [];
@@ -104,7 +106,7 @@ export function buildIntervalSeries(records, rangeHours, intervalMinutes, timeZo
   for (let i = 1; i < sorted.length; i += 1) {
     const prev = sorted[i - 1];
     const curr = sorted[i];
-    if (curr.t < start || curr.t > now) {
+    if (curr.t < start || curr.t > end) {
       continue;
     }
     const delta = prev.b - curr.b;

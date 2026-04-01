@@ -79,6 +79,10 @@ body {
   gap: 6px;
 }
 
+.control.wide {
+  min-width: 180px;
+}
+
 .control span {
   font-size: 12px;
   color: var(--muted);
@@ -109,8 +113,28 @@ body {
   align-items: center;
 }
 
+.ghost {
+  height: 36px;
+  border: 1px solid #c9d4e4;
+  border-radius: 8px;
+  background: #fff;
+  color: #3f546f;
+  padding: 0 14px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
 .btn-link.secondary {
   background: #5b7095;
+}
+
+.chart-meta {
+  margin-top: 10px;
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .chart-panel {
@@ -146,6 +170,13 @@ body {
 
   .control {
     width: 100%;
+  }
+
+  .btn-link,
+  #apply-btn,
+  .ghost {
+    width: 100%;
+    justify-content: center;
   }
 
   .header h1 {

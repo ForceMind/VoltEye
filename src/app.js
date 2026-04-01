@@ -6,6 +6,8 @@ import { buildDailyConsumption, buildIntervalSeries, buildStatusSummary } from "
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const publicDir = path.resolve(__dirname, "../public");
+const MAX_BUCKETS = 1500;
+const MAX_RANGE_HOURS = 24 * 365;
 
 function parseDays(raw, fallback = 30) {
   const value = Number(raw ?? fallback);
@@ -28,7 +30,7 @@ function parseRangeHours(raw, fallback = 72) {
   if (!Number.isFinite(value)) {
     return fallback;
   }
-  return Math.min(24 * 30, Math.max(1, Math.floor(value)));
+  return Math.min(MAX_RANGE_HOURS, Math.max(1, Math.floor(value)));
 }
 
 function parseIntervalMinutes(raw, fallback, minIntervalMinutes) {
@@ -37,6 +39,57 @@ function parseIntervalMinutes(raw, fallback, minIntervalMinutes) {
     return fallback;
   }
   return Math.max(minIntervalMinutes, Math.floor(value));
+}
+
+function parseTimestampMs(raw) {
+  if (!raw) {
+    return null;
+  }
+  const ms = new Date(String(raw)).getTime();
+  if (!Number.isFinite(ms)) {
+    return null;
+  }
+  return ms;
+}
+
+function resolveChartWindow(query, fallbackRangeHours) {
+  const now = Date.now();
+  const startMs = parseTimestampMs(query.start);
+  const endMs = parseTimestampMs(query.end);
+
+  if ((startMs === null) !== (endMs === null)) {
+    throw new Error("start 和 end 需要同时提供");
+  }
+
+  if (startMs !== null && endMs !== null) {
+    if (endMs <= startMs) {
+      throw new Error("end 必须晚于 start");
+    }
+    const cappedEnd = Math.min(endMs, now);
+    const cappedStart = Math.min(startMs, cappedEnd - 1);
+    const maxRangeMs = MAX_RANGE_HOURS * 60 * 60 * 1000;
+    if (cappedEnd - cappedStart > maxRangeMs) {
+      throw new Error(`时间范围不能超过 ${MAX_RANGE_HOURS} 小时`);
+    }
+    return {
+      startMs: cappedStart,
+      endMs: cappedEnd,
+      mode: "custom",
+    };
+  }
+
+  const rangeMs = Math.max(1, Math.floor(fallbackRangeHours * 60 * 60 * 1000));
+  return {
+    startMs: now - rangeMs,
+    endMs: now,
+    mode: "preset",
+  };
+}
+
+function pickEffectiveIntervalMinutes(requestedIntervalMinutes, minIntervalMinutes, startMs, endMs) {
+  const windowMinutes = Math.max(1, Math.ceil((endMs - startMs) / 60_000));
+  const adaptiveMin = Math.ceil(windowMinutes / MAX_BUCKETS);
+  return Math.max(minIntervalMinutes, requestedIntervalMinutes, adaptiveMin);
 }
 
 function csvEscape(value) {
@@ -93,22 +146,48 @@ export function createApp({ store, poller, config, logger }) {
       minIntervalMinutes,
       defaultIntervalMinutes: minIntervalMinutes,
       defaultRangeHours: 72,
+      maxRangeHours: MAX_RANGE_HOURS,
+      maxBuckets: MAX_BUCKETS,
       serverTime: new Date().toISOString(),
     });
   });
 
   app.get("/api/chart", (req, res) => {
-    const rangeHours = parseRangeHours(req.query.rangeHours, 72);
-    const intervalMinutes = parseIntervalMinutes(req.query.intervalMinutes, minIntervalMinutes, minIntervalMinutes);
-    const records = store.getRecords();
-    const points = buildIntervalSeries(records, rangeHours, intervalMinutes, config.timeZone);
-    res.json({
-      rangeHours,
-      intervalMinutes,
-      minIntervalMinutes,
-      points,
-      updatedAt: new Date().toISOString(),
-    });
+    try {
+      const rangeHours = parseRangeHours(req.query.rangeHours, 72);
+      const window = resolveChartWindow(req.query, rangeHours);
+      const requestedIntervalMinutes = parseIntervalMinutes(
+        req.query.intervalMinutes,
+        minIntervalMinutes,
+        minIntervalMinutes,
+      );
+      const intervalMinutes = pickEffectiveIntervalMinutes(
+        requestedIntervalMinutes,
+        minIntervalMinutes,
+        window.startMs,
+        window.endMs,
+      );
+
+      const records = store.getRecords();
+      const points = buildIntervalSeries(records, window.startMs, window.endMs, intervalMinutes, config.timeZone);
+      res.json({
+        mode: window.mode,
+        rangeHours,
+        intervalMinutes,
+        requestedIntervalMinutes,
+        minIntervalMinutes,
+        bucketCount: points.length,
+        start: new Date(window.startMs).toISOString(),
+        end: new Date(window.endMs).toISOString(),
+        points,
+        updatedAt: new Date().toISOString(),
+      });
+    } catch (error) {
+      res.status(400).json({
+        ok: false,
+        error: error.message,
+      });
+    }
   });
 
   app.get("/api/chart-daily", (req, res) => {
@@ -145,18 +224,42 @@ export function createApp({ store, poller, config, logger }) {
   });
 
   app.get("/api/export-chart.csv", (req, res) => {
-    const rangeHours = parseRangeHours(req.query.rangeHours, 72);
-    const intervalMinutes = parseIntervalMinutes(req.query.intervalMinutes, minIntervalMinutes, minIntervalMinutes);
-    const points = buildIntervalSeries(store.getRecords(), rangeHours, intervalMinutes, config.timeZone);
+    try {
+      const rangeHours = parseRangeHours(req.query.rangeHours, 72);
+      const window = resolveChartWindow(req.query, rangeHours);
+      const requestedIntervalMinutes = parseIntervalMinutes(
+        req.query.intervalMinutes,
+        minIntervalMinutes,
+        minIntervalMinutes,
+      );
+      const intervalMinutes = pickEffectiveIntervalMinutes(
+        requestedIntervalMinutes,
+        minIntervalMinutes,
+        window.startMs,
+        window.endMs,
+      );
+      const points = buildIntervalSeries(
+        store.getRecords(),
+        window.startMs,
+        window.endMs,
+        intervalMinutes,
+        config.timeZone,
+      );
 
-    res.setHeader("Content-Type", "text/csv; charset=utf-8");
-    res.setHeader("Content-Disposition", 'attachment; filename="volteye-chart.csv"');
-    res.send(
-      toCsv(
-        ["timestamp", "label", "consumption", "balance"],
-        points.map((row) => [row.ts, row.label, row.consumption, row.balance]),
-      ),
-    );
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      res.setHeader("Content-Disposition", 'attachment; filename="volteye-chart.csv"');
+      res.send(
+        toCsv(
+          ["timestamp", "label", "consumption", "balance"],
+          points.map((row) => [row.ts, row.label, row.consumption, row.balance]),
+        ),
+      );
+    } catch (error) {
+      res.status(400).json({
+        ok: false,
+        error: error.message,
+      });
+    }
   });
 
   app.post("/api/sync", async (req, res) => {
