@@ -1,0 +1,31 @@
+{
+  "name": "volteye",
+  "version": "1.0.0",
+  "description": "Apartment electricity balance monitoring service",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "test": "echo \"No tests configured\""
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ForceMind/VoltEye.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/ForceMind/VoltEye/issues"
+  },
+  "homepage": "https://github.com/ForceMind/VoltEye#readme",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "axios": "^1.14.0",
+    "dotenv": "^17.3.1",
+    "express": "^5.2.1"
+  }
+}
