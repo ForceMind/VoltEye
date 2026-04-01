@@ -11,7 +11,7 @@
     <main class="container">
       <header class="header">
         <h1>公寓电费监控</h1>
-        <p class="subtitle">单图表展示近 30 天电费消耗（元）</p>
+        <p class="subtitle">柱状图：区间电费消耗，折线图：余额走势</p>
       </header>
 
       <section class="stats">
@@ -27,6 +27,29 @@
           <span>最后同步</span>
           <strong id="last-sync">--</strong>
         </div>
+      </section>
+
+      <section class="controls">
+        <label class="control">
+          <span>显示区间</span>
+          <select id="range-hours">
+            <option value="6">近 6 小时</option>
+            <option value="12">近 12 小时</option>
+            <option value="24">近 24 小时</option>
+            <option value="48">近 2 天</option>
+            <option value="72" selected>近 3 天</option>
+            <option value="168">近 7 天</option>
+          </select>
+        </label>
+
+        <label class="control">
+          <span>显示间隔(分钟)</span>
+          <input id="interval-minutes" type="number" min="30" step="30" value="30" />
+        </label>
+
+        <button id="apply-btn" type="button">应用设置</button>
+        <a id="export-chart-link" class="btn-link" href="/api/export-chart.csv">导出当前图表</a>
+        <a id="export-raw-link" class="btn-link secondary" href="/api/export.csv">导出原始表格</a>
       </section>
 
       <section class="chart-panel">

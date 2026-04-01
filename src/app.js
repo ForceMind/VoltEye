@@ -1,7 +1,7 @@
 import path from "node:path";
 import express from "express";
 import { fileURLToPath } from "node:url";
-import { buildDailyConsumption, buildStatusSummary } from "./metrics.js";
+import { buildDailyConsumption, buildIntervalSeries, buildStatusSummary } from "./metrics.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -23,6 +23,22 @@ function parseLimit(raw, fallback = 200) {
   return Math.min(5000, Math.max(1, Math.floor(value)));
 }
 
+function parseRangeHours(raw, fallback = 72) {
+  const value = Number(raw ?? fallback);
+  if (!Number.isFinite(value)) {
+    return fallback;
+  }
+  return Math.min(24 * 30, Math.max(1, Math.floor(value)));
+}
+
+function parseIntervalMinutes(raw, fallback, minIntervalMinutes) {
+  const value = Number(raw ?? fallback);
+  if (!Number.isFinite(value)) {
+    return fallback;
+  }
+  return Math.max(minIntervalMinutes, Math.floor(value));
+}
+
 function csvEscape(value) {
   const text = String(value ?? "");
   if (text.includes(",") || text.includes('"') || text.includes("\n")) {
@@ -31,10 +47,20 @@ function csvEscape(value) {
   return text;
 }
 
+function toCsv(headers, rows) {
+  const lines = [headers.join(",")];
+  for (const row of rows) {
+    lines.push(row.map((cell) => csvEscape(cell)).join(","));
+  }
+  return `\uFEFF${lines.join("\n")}\n`;
+}
+
 export function createApp({ store, poller, config, logger }) {
   const app = express();
   app.disable("x-powered-by");
   app.use(express.json({ limit: "128kb" }));
+
+  const minIntervalMinutes = Math.max(1, Math.round(config.pollIntervalMs / 60_000));
 
   app.get("/api/health", (req, res) => {
     const status = store.getStatus();
@@ -62,7 +88,30 @@ export function createApp({ store, poller, config, logger }) {
     });
   });
 
+  app.get("/api/ui-config", (req, res) => {
+    res.json({
+      minIntervalMinutes,
+      defaultIntervalMinutes: minIntervalMinutes,
+      defaultRangeHours: 72,
+      serverTime: new Date().toISOString(),
+    });
+  });
+
   app.get("/api/chart", (req, res) => {
+    const rangeHours = parseRangeHours(req.query.rangeHours, 72);
+    const intervalMinutes = parseIntervalMinutes(req.query.intervalMinutes, minIntervalMinutes, minIntervalMinutes);
+    const records = store.getRecords();
+    const points = buildIntervalSeries(records, rangeHours, intervalMinutes, config.timeZone);
+    res.json({
+      rangeHours,
+      intervalMinutes,
+      minIntervalMinutes,
+      points,
+      updatedAt: new Date().toISOString(),
+    });
+  });
+
+  app.get("/api/chart-daily", (req, res) => {
     const days = parseDays(req.query.days, 30);
     const records = store.getRecords();
     const points = buildDailyConsumption(records, days, config.timeZone);
@@ -85,22 +134,29 @@ export function createApp({ store, poller, config, logger }) {
 
   app.get("/api/export.csv", (req, res) => {
     const records = store.getRecords();
-    const header = ["timestamp", "balance", "contractId", "meterKey", "meterBrand"];
-    const lines = [header.join(",")];
-    for (const row of records) {
-      lines.push(
-        [
-          csvEscape(row.timestamp),
-          csvEscape(row.balance),
-          csvEscape(row.contractId),
-          csvEscape(row.meterKey),
-          csvEscape(row.meterBrand),
-        ].join(","),
-      );
-    }
     res.setHeader("Content-Type", "text/csv; charset=utf-8");
     res.setHeader("Content-Disposition", 'attachment; filename="volteye-history.csv"');
-    res.send(`\uFEFF${lines.join("\n")}\n`);
+    res.send(
+      toCsv(
+        ["timestamp", "balance", "contractId", "meterKey", "meterBrand"],
+        records.map((row) => [row.timestamp, row.balance, row.contractId, row.meterKey, row.meterBrand]),
+      ),
+    );
+  });
+
+  app.get("/api/export-chart.csv", (req, res) => {
+    const rangeHours = parseRangeHours(req.query.rangeHours, 72);
+    const intervalMinutes = parseIntervalMinutes(req.query.intervalMinutes, minIntervalMinutes, minIntervalMinutes);
+    const points = buildIntervalSeries(store.getRecords(), rangeHours, intervalMinutes, config.timeZone);
+
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", 'attachment; filename="volteye-chart.csv"');
+    res.send(
+      toCsv(
+        ["timestamp", "label", "consumption", "balance"],
+        points.map((row) => [row.ts, row.label, row.consumption, row.balance]),
+      ),
+    );
   });
 
   app.post("/api/sync", async (req, res) => {
@@ -113,7 +169,7 @@ export function createApp({ store, poller, config, logger }) {
       const snapshot = await poller.runOnce(true);
       return res.json({ ok: true, snapshot });
     } catch (error) {
-      logger.warn(`手动采集失败: ${error.message}`);
+      logger.warn(`Manual sync failed: ${error.message}`);
       return res.status(500).json({ ok: false, error: error.message });
     }
   });
@@ -121,7 +177,7 @@ export function createApp({ store, poller, config, logger }) {
   app.use(express.static(publicDir, { extensions: ["html"] }));
 
   app.use((error, req, res, next) => {
-    logger.error(`未处理异常: ${error.message}`);
+    logger.error(`Unhandled error: ${error.message}`);
     res.status(500).json({
       ok: false,
       error: "internal_server_error",

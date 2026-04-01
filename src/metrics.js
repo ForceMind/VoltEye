@@ -29,6 +29,95 @@ function buildDayKeys(days, timeZone) {
   return keys;
 }
 
+function formatChartLabel(date, timeZone) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(date);
+
+  const map = {};
+  for (const part of parts) {
+    if (part.type === "month" || part.type === "day" || part.type === "hour" || part.type === "minute") {
+      map[part.type] = part.value;
+    }
+  }
+  return `${map.month}-${map.day} ${map.hour}:${map.minute}`;
+}
+
+function normalizeRecords(records) {
+  if (!Array.isArray(records)) {
+    return [];
+  }
+  return records
+    .map((item) => ({
+      ...item,
+      t: new Date(item.timestamp).getTime(),
+      b: Number(item.balance),
+    }))
+    .filter((item) => Number.isFinite(item.t) && Number.isFinite(item.b))
+    .sort((a, b) => a.t - b.t);
+}
+
+export function buildIntervalSeries(records, rangeHours, intervalMinutes, timeZone) {
+  const sorted = normalizeRecords(records);
+  const now = Date.now();
+  const rangeMs = Math.max(1, Math.floor(rangeHours * 60 * 60 * 1000));
+  const intervalMs = Math.max(60_000, Math.floor(intervalMinutes * 60 * 1000));
+  const start = now - rangeMs;
+  const bucketCount = Math.max(1, Math.ceil(rangeMs / intervalMs));
+
+  const points = [];
+  for (let i = 0; i < bucketCount; i += 1) {
+    const bucketStart = start + i * intervalMs;
+    points.push({
+      ts: new Date(bucketStart).toISOString(),
+      label: formatChartLabel(new Date(bucketStart), timeZone),
+      consumption: 0,
+      balance: null,
+    });
+  }
+
+  if (!sorted.length) {
+    return points;
+  }
+
+  let pointer = 0;
+  let lastBalance = null;
+  while (pointer < sorted.length && sorted[pointer].t < start) {
+    lastBalance = sorted[pointer].b;
+    pointer += 1;
+  }
+
+  for (let i = 0; i < points.length; i += 1) {
+    const bucketEnd = start + (i + 1) * intervalMs;
+    while (pointer < sorted.length && sorted[pointer].t <= bucketEnd) {
+      lastBalance = sorted[pointer].b;
+      pointer += 1;
+    }
+    points[i].balance = lastBalance === null ? null : round2(lastBalance);
+  }
+
+  for (let i = 1; i < sorted.length; i += 1) {
+    const prev = sorted[i - 1];
+    const curr = sorted[i];
+    if (curr.t < start || curr.t > now) {
+      continue;
+    }
+    const delta = prev.b - curr.b;
+    if (delta <= 0) {
+      continue;
+    }
+    const index = Math.min(points.length - 1, Math.max(0, Math.floor((curr.t - start) / intervalMs)));
+    points[index].consumption = round2(points[index].consumption + delta);
+  }
+
+  return points;
+}
+
 export function buildDailyConsumption(records, days, timeZone) {
   const dayKeys = buildDayKeys(days, timeZone);
   const daySet = new Set(dayKeys);

@@ -3,8 +3,18 @@ const latestBalanceEl = document.getElementById("latest-balance");
 const todayUsageEl = document.getElementById("today-usage");
 const lastSyncEl = document.getElementById("last-sync");
 const statusTextEl = document.getElementById("status-text");
+const rangeHoursEl = document.getElementById("range-hours");
+const intervalMinutesEl = document.getElementById("interval-minutes");
+const applyBtnEl = document.getElementById("apply-btn");
+const exportChartLinkEl = document.getElementById("export-chart-link");
 
 const chart = echarts.init(chartDom);
+
+const state = {
+  rangeHours: Number(rangeHoursEl.value) || 72,
+  intervalMinutes: Number(intervalMinutesEl.value) || 30,
+  minIntervalMinutes: 30,
+};
 
 function formatDateTime(value) {
   if (!value) {
@@ -17,17 +27,42 @@ function formatDateTime(value) {
   return date.toLocaleString("zh-CN", { hour12: false });
 }
 
+function setStatus(message, isError = false) {
+  statusTextEl.textContent = message;
+  statusTextEl.classList.toggle("error", Boolean(isError));
+}
+
+function clampInterval(value) {
+  if (!Number.isFinite(value)) {
+    return state.minIntervalMinutes;
+  }
+  return Math.max(state.minIntervalMinutes, Math.floor(value));
+}
+
+function updateExportLink() {
+  const query = new URLSearchParams({
+    rangeHours: String(state.rangeHours),
+    intervalMinutes: String(state.intervalMinutes),
+  });
+  exportChartLinkEl.href = `/api/export-chart.csv?${query.toString()}`;
+}
+
 function renderChart(points) {
-  const labels = points.map((item) => item.day.slice(5));
-  const values = points.map((item) => item.consumption);
+  const labels = points.map((item) => item.label);
+  const consumptionValues = points.map((item) => item.consumption);
+  const balanceValues = points.map((item) => item.balance);
 
   chart.setOption(
     {
-      animationDuration: 400,
+      animationDuration: 350,
+      legend: {
+        top: 4,
+        data: ["电费消耗", "电费余额"],
+      },
       grid: {
-        left: 24,
-        right: 18,
-        top: 35,
+        left: 20,
+        right: 20,
+        top: 60,
         bottom: 25,
         containLabel: true,
       },
@@ -39,22 +74,46 @@ function renderChart(points) {
         data: labels,
         axisLine: { lineStyle: { color: "#9ca8b8" } },
       },
-      yAxis: {
-        type: "value",
-        name: "元",
-        axisLine: { lineStyle: { color: "#9ca8b8" } },
-        splitLine: { lineStyle: { color: "#eef1f5" } },
-      },
+      yAxis: [
+        {
+          type: "value",
+          name: "消耗(元)",
+          axisLine: { lineStyle: { color: "#9ca8b8" } },
+          splitLine: { lineStyle: { color: "#eef1f5" } },
+        },
+        {
+          type: "value",
+          name: "余额(元)",
+          axisLine: { lineStyle: { color: "#9ca8b8" } },
+          splitLine: { show: false },
+        },
+      ],
       series: [
         {
           name: "电费消耗",
           type: "bar",
-          data: values,
-          barMaxWidth: 22,
+          yAxisIndex: 0,
+          data: consumptionValues,
+          barMaxWidth: 18,
           itemStyle: {
             color: "#2f7b6d",
             borderRadius: [4, 4, 0, 0],
           },
+        },
+        {
+          name: "电费余额",
+          type: "line",
+          yAxisIndex: 1,
+          smooth: true,
+          connectNulls: true,
+          symbolSize: 5,
+          itemStyle: {
+            color: "#f08a24",
+          },
+          lineStyle: {
+            width: 2,
+          },
+          data: balanceValues,
         },
       ],
     },
@@ -70,25 +129,57 @@ async function fetchJson(url) {
   return response.json();
 }
 
+async function loadUiConfig() {
+  const config = await fetchJson("/api/ui-config");
+  state.minIntervalMinutes = Number(config.minIntervalMinutes) || 30;
+  state.intervalMinutes = clampInterval(Number(config.defaultIntervalMinutes) || state.intervalMinutes);
+  intervalMinutesEl.min = String(state.minIntervalMinutes);
+  intervalMinutesEl.step = String(state.minIntervalMinutes);
+  intervalMinutesEl.value = String(state.intervalMinutes);
+}
+
+function readControls() {
+  state.rangeHours = Number(rangeHoursEl.value) || 72;
+  state.intervalMinutes = clampInterval(Number(intervalMinutesEl.value));
+  intervalMinutesEl.value = String(state.intervalMinutes);
+}
+
 async function refresh() {
   try {
-    const [status, chartData] = await Promise.all([fetchJson("/api/status"), fetchJson("/api/chart?days=30")]);
+    readControls();
+    updateExportLink();
+
+    const query = new URLSearchParams({
+      rangeHours: String(state.rangeHours),
+      intervalMinutes: String(state.intervalMinutes),
+    });
+
+    const [status, chartData] = await Promise.all([fetchJson("/api/status"), fetchJson(`/api/chart?${query.toString()}`)]);
+
+    state.minIntervalMinutes = Number(chartData.minIntervalMinutes) || state.minIntervalMinutes;
+    state.intervalMinutes = clampInterval(Number(chartData.intervalMinutes) || state.intervalMinutes);
+    intervalMinutesEl.min = String(state.minIntervalMinutes);
+    intervalMinutesEl.step = String(state.minIntervalMinutes);
+    intervalMinutesEl.value = String(state.intervalMinutes);
+    updateExportLink();
 
     latestBalanceEl.textContent = status.latestBalance == null ? "--" : `${status.latestBalance} 元`;
     todayUsageEl.textContent = `${status.todayConsumption ?? 0} 元`;
     lastSyncEl.textContent = formatDateTime(status.lastSyncAt);
-
-    statusTextEl.textContent = status.lastError ? `采集异常: ${status.lastError}` : "运行正常";
-    statusTextEl.classList.toggle("error", Boolean(status.lastError));
+    setStatus(status.lastError ? `采集异常: ${status.lastError}` : "运行正常", Boolean(status.lastError));
 
     renderChart(chartData.points || []);
   } catch (error) {
-    statusTextEl.textContent = `加载失败: ${error.message}`;
-    statusTextEl.classList.add("error");
+    setStatus(`加载失败: ${error.message}`, true);
   }
 }
 
+applyBtnEl.addEventListener("click", () => {
+  refresh();
+});
+
 window.addEventListener("resize", () => chart.resize());
 
-refresh();
+await loadUiConfig();
+await refresh();
 setInterval(refresh, 60 * 1000);
